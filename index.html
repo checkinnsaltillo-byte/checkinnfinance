@@ -443,6 +443,31 @@
 #rtAl{display:none !important;}
 #rightAlertas{display:none !important;}
 
+
+/* --- Presupuesto editable --- */
+.budgetTable { width:100%; border-collapse: collapse; }
+.budgetTable th, .budgetTable td { padding:10px 10px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.budgetTable thead th { position: sticky; top: 0; background: rgba(10,15,25,.98); z-index: 2; }
+.budgetTable .num { text-align:right; }
+.budgetTable input{
+  width:100%;
+  padding:8px 10px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  font-weight:750;
+  outline:none;
+}
+.budgetTable input:focus{ border-color: rgba(120,180,255,.65); box-shadow: 0 0 0 3px rgba(80,140,255,.18); }
+.budgetTable .bDel{ padding:8px 10px; }
+button.ghost{
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.14);
+  color: var(--text);
+}
+button.ghost:hover{ background: rgba(255,255,255,.10); }
+
 </style>
 </head>
 <body>
@@ -455,6 +480,7 @@
     <div class="t">Check Inn - Monitor Financiero <span id="titleFiltersTop" class="titleFilters"></span></div>
     <button class="primary" id="btnRefreshTop" title="Actualizar datos">Actualizar</button>
     <button id="btnPDF" title="Descargar reporte PDF">PDF</button>
+    <button id="btnBudgetWin" title="Ver presupuesto asignado">Presupuesto</button>
     <button id="btnFinWin" title="Indicadores financieros">Indicadores</button>
   </div>
 
@@ -739,38 +765,131 @@
     </div>
   </div>
 
+  <!-- Ventana independiente: Presupuesto (referencia) -->
+  <div class="finOverlay" id="budgetOverlay" aria-hidden="true">
+    <div class="finWindow" role="dialog" aria-label="Presupuesto de referencia">
+      <div class="panel finModule" style="margin:0;border-radius:16px; background: rgba(10,15,25,0.98);">
+        <div class="finHeader">
+          <div>
+            <div class="h">Presupuesto de referencia</div>
+            <div class="sub">Tabla con los montos asignados por Categoría y Concepto (desde PRESUPUESTO).</div>
+          </div>
+          <div class="finHeaderRight">
+            <button class="iconBtn" id="btnBudgetClose" title="Cerrar">✕</button>
+          </div>
+        </div>
+
+        <div class="topbar" style="margin-top:0; margin-bottom:10px;">
+          <div style="font-weight:900; font-size:12px; color:var(--muted)">Buscar:</div>
+          <input id="budgetSearch" placeholder="Categoría, concepto o tipo…" style="flex:1; min-width:220px; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06); color: var(--text); font-weight:750;" />
+          <button id="btnBudgetExport" title="Descargar CSV">CSV</button>
+          <button id="btnBudgetAdd" title="Agregar renglón">+ Renglón</button>
+          <button id="btnBudgetReset" class="ghost" title="Restaurar presupuesto original (borra cambios locales)">Restaurar</button>
+          <div id="budgetSaveState" class="small" style="margin-left:auto;color:var(--muted);font-weight:800;">—</div>
+        </div>
+
+        <div class="small" id="budgetSummary" style="margin-bottom:10px;">—</div>
+
+        <div class="scroll" style="max-height:70vh;">
+          <table class="budgetTable">
+            <thead>
+              <tr>
+                <th>Tipo</th>
+                <th>Categoría</th>
+                <th>Concepto</th>
+                <th class="num">Mensual</th>
+                <th class="num">Anual</th>
+                <th style="width:44px;"></th>
+              </tr>
+            </thead>
+            <tbody id="tbBudget"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
 <script>
     // URL fija dentro del código (como pediste)
       // window.DATA_ENDPOINT = "https://script.google.com/macros/s/AKfycbwmlnws66Fz008rDTX9nWmvUEd6akvfT7e_ejgT85MGDAzx3c8iWNjHj05nS2W0qB8_cw/exec";
     window.DATA_ENDPOINT = "https://checkinndashboard1-1044570371371.northamerica-south1.run.app/api/data";
 
-    // Parámetro editable (menú): Esperado mensual total para KPIs de Ingresos
-    const EXPECTED_INCOME_KEY = 'expected_income_monthly_total_v1';
-    let EXPECTED_INCOME_MONTHLY = 700000; // default
+    // Parámetro: Esperado mensual total (Ingresos) = $700,000 (fijo por solicitud)
+    const EXPECTED_INCOME_MONTHLY = 700000;
     function loadExpectedIncomeParam(){
-      try{
-        const saved = localStorage.getItem(EXPECTED_INCOME_KEY);
-        if(saved !== null && saved !== undefined && saved !== ''){
-          const v = Number(saved);
-          if(isFinite(v) && v >= 0) EXPECTED_INCOME_MONTHLY = v;
-        }
-      }catch(e){}
       const inp = document.getElementById('expectedIncome');
       if(inp){
         inp.value = String(EXPECTED_INCOME_MONTHLY);
-        inp.addEventListener('input', ()=>{
-          const v = Number(inp.value);
-          if(isFinite(v) && v >= 0){
-            EXPECTED_INCOME_MONTHLY = v;
-            try{ localStorage.setItem(EXPECTED_INCOME_KEY, String(v)); }catch(e){}
-            render();
-          }
-        });
+        inp.disabled = true;
+        inp.title = 'Valor fijo: $700,000';
       }
     }
 
     let RAW = [];
     let BUDGET = [];
+
+    // --- Presupuesto editable (persistencia local) ---
+    const LS_BUDGET_KEY = 'checkinn_budget_override_v1';
+    let BUDGET_DEFAULT = [];
+    let _budgetSaveTimer = null;
+
+    function _ensureBudgetIds(arr){
+      for(const r of (arr||[])){
+        if(!r) continue;
+        if(!r.__id) r.__id = 'b_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36);
+      }
+      return arr;
+    }
+
+    function loadBudgetOverride(){
+      try{
+        const s = localStorage.getItem(LS_BUDGET_KEY);
+        if(!s) return null;
+        const j = JSON.parse(s);
+        if(!Array.isArray(j)) return null;
+        return _ensureBudgetIds(j);
+      }catch(e){
+        return null;
+      }
+    }
+
+    function setBudgetSaveState(msg){
+      const el = document.getElementById('budgetSaveState');
+      if(el) el.textContent = msg;
+    }
+
+    function saveBudgetOverrideDebounced(){
+      try{ if(_budgetSaveTimer) clearTimeout(_budgetSaveTimer); }catch(e){}
+      setBudgetSaveState('Guardando…');
+      _budgetSaveTimer = setTimeout(()=>{
+        try{
+          localStorage.setItem(LS_BUDGET_KEY, JSON.stringify(BUDGET||[]));
+          setBudgetSaveState('Guardado');
+        }catch(e){
+          console.warn('No se pudo guardar presupuesto en localStorage:', e);
+          setBudgetSaveState('No se pudo guardar');
+        }
+      }, 250);
+    }
+
+    function applyBudgetFromPayload(payloadBudget){
+      BUDGET_DEFAULT = _ensureBudgetIds((payloadBudget||[]));
+      const override = loadBudgetOverride();
+      BUDGET = override ? override : BUDGET_DEFAULT;
+      _ensureBudgetIds(BUDGET);
+      resetBudgetCache();
+      setBudgetSaveState(override ? 'Guardado (local)' : 'Original (API)');
+    }
+
+    function restoreBudgetDefault(){
+      try{ localStorage.removeItem(LS_BUDGET_KEY); }catch(e){}
+      BUDGET = _ensureBudgetIds((BUDGET_DEFAULT||[]).map(x=>({...x})));
+      resetBudgetCache();
+      setBudgetSaveState('Original (API)');
+      try{ render(); }catch(e){}
+      try{ renderBudgetReference(); }catch(e){}
+    }
+
     let SELECTED_KEY = null;
     let SELECTED_SRC = null;
     let CURRENT_VIEW = 'detalle';
@@ -799,6 +918,13 @@
       .replace(/\s+/g,' ')
       .trim()
       .toLowerCase();
+
+    const escapeHtml = (s)=> String(s??'')
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#39;');
 
     function yearFromMes(mes){
       const m = String(mes||"").match(/(\d{4})\s*$/);
@@ -885,8 +1011,9 @@
         if(!res.ok) throw new Error('HTTP '+res.status);
         const payload = await res.json();
         RAW = payload.records || [];
-        BUDGET = payload.budget || [];
-        resetBudgetCache();
+        applyBudgetFromPayload(payload.budget || []);
+        // resetBudgetCache() ya se ejecuta dentro de applyBudgetFromPayload
+
         $('status').innerHTML = '<span class="dot"></span>Online • ' + RAW.length.toLocaleString('es-MX') + ' movimientos';
         return true;
       }catch(e){
@@ -1005,15 +1132,20 @@
     }
 
     function setDefaultAll(){
-      // Default: último año disponible, y TODOS los meses de ese año.
-      const years = getAllValuesForFilter('Año');
-      const lastYear = years.length ? years.sort((a,b)=>b.localeCompare(a,'es'))[0] : '';
-      FILTER_STATE['Año'] = lastYear ? new Set([lastYear]) : new Set(years);
+      // Default: ÚLTIMO mes y año disponible (más reciente en los datos)
+      const allMes = getAllValuesForFilter('Mes');
+      const sortedMes = [...allMes].sort((a,b)=>{
+        const ya = yearFromMes(a), yb = yearFromMes(b);
+        if(ya!==yb) return ya.localeCompare(yb,'es');
+        const ka = monthOrderKey(a), kb = monthOrderKey(b);
+        if(ka!==kb) return ka-kb;
+        return String(a).localeCompare(String(b),'es');
+      });
+      const lastMes = sortedMes.length ? sortedMes[sortedMes.length-1] : '';
+      const lastYear = lastMes ? yearFromMes(lastMes) : (getAllValuesForFilter('Año').sort((a,b)=>b.localeCompare(a,'es'))[0] || '');
 
-      const allAno = getAllValuesForFilter('Año');
-        const allMes = getAllValuesForFilter('Mes');
-      const mesLastYear = lastYear ? allMes.filter(m=>yearFromMes(m)===lastYear) : allMes;
-      FILTER_STATE.Mes = new Set(mesLastYear);
+      FILTER_STATE['Año'] = lastYear ? new Set([lastYear]) : new Set(getAllValuesForFilter('Año'));
+      FILTER_STATE.Mes = lastMes ? new Set([lastMes]) : new Set(allMes);
 
       ['CATEGORIA','CONCEPTO','Cuenta bancaria'].forEach(name=>{
         FILTER_STATE[name] = new Set(getAllValuesForFilter(name));
@@ -1099,6 +1231,145 @@
     function resetBudgetCache(){
       BUDGET_INDEX_CACHE.E = null;
       BUDGET_INDEX_CACHE.I = null;
+    }
+
+    // --- Tabla de Presupuesto (referencia) ---
+    function normalizeBudgetRow(b){
+      const tipoRaw = (b.TIPO ?? b.Tipo ?? b.CUENTA ?? b.Cuenta ?? '').toString();
+      const t = canon(tipoRaw);
+      let Tipo = '—';
+      if(t.includes('egr') || t.includes('gasto') || t.includes('egreso')) Tipo = 'Egresos';
+      else if(t.includes('ing') || t.includes('venta') || t.includes('ingreso')) Tipo = 'Ingresos';
+      const Categoria = (b.CATEGORIA ?? b.Categoria ?? b['Categoría'] ?? '').toString();
+      const Concepto  = (b.CONCEPTO  ?? b.Concepto  ?? b['Concepto']  ?? '').toString();
+      const Mensual   = Number(b.MENSUAL ?? b.Mensual ?? 0) || 0;
+      const Anual     = Number(b.ANUAL   ?? b.Anual   ?? (Mensual*12) ?? 0) || 0;
+      return {Tipo, Categoria, Concepto, Mensual, Anual};
+    }
+
+    
+    function getBudgetReferenceRows(){
+      const rows = (BUDGET||[]).map((b, idx)=>{
+        const r = normalizeBudgetRow(b);
+        return {...r, __id: b.__id, _idx: idx};
+      }).filter(r=> canon(r.Categoria) || canon(r.Concepto));
+      // Orden: Tipo, Categoria, Concepto
+      rows.sort((a,b)=>{
+        const ta = a.Tipo==='Ingresos' ? 0 : (a.Tipo==='Egresos' ? 1 : 2);
+        const tb = b.Tipo==='Ingresos' ? 0 : (b.Tipo==='Egresos' ? 1 : 2);
+        if(ta!==tb) return ta-tb;
+        const ca = canon(a.Categoria), cb = canon(b.Categoria);
+        if(ca!==cb) return ca.localeCompare(cb,'es');
+        const coA = canon(a.Concepto), coB = canon(b.Concepto);
+        if(coA!==coB) return coA.localeCompare(coB,'es');
+        return 0;
+      });
+      return rows;
+    }
+
+    function _asNumber(v){
+      const n = Number(String(v??'').replace(/[^0-9\.\-]/g,''));
+      return isFinite(n) ? n : 0;
+    }
+
+    function updateBudgetById(id, patch){
+      const i = (BUDGET||[]).findIndex(r=> r && r.__id === id);
+      if(i<0) return;
+      BUDGET[i] = {...BUDGET[i], ...patch};
+      // Recalcular cache y dashboard
+      resetBudgetCache();
+      saveBudgetOverrideDebounced();
+      try{ render(); }catch(e){}
+    }
+
+    function deleteBudgetById(id){
+      const i = (BUDGET||[]).findIndex(r=> r && r.__id === id);
+      if(i<0) return;
+      BUDGET.splice(i,1);
+      resetBudgetCache();
+      saveBudgetOverrideDebounced();
+      try{ renderBudgetReference(); }catch(e){}
+      try{ render(); }catch(e){}
+    }
+
+    function addBudgetRow(){
+      BUDGET = (BUDGET||[]);
+      const row = { __id: 'b_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36),
+        TIPO:'Egresos', CATEGORIA:'', CONCEPTO:'', MENSUAL:0, ANUAL:0
+      };
+      BUDGET.push(row);
+      resetBudgetCache();
+      saveBudgetOverrideDebounced();
+      try{ renderBudgetReference(); }catch(e){}
+      // Focus al nuevo renglón
+      setTimeout(()=>{
+        const el = document.querySelector(`input[data-id="${row.__id}"][data-field="CATEGORIA"]`);
+        try{ el && el.focus(); }catch(e){}
+      }, 50);
+    }
+
+    function renderBudgetReference(){
+      const tb = document.getElementById('tbBudget');
+      const sumEl = document.getElementById('budgetSummary');
+      if(!tb) return;
+
+      const q = canon(document.getElementById('budgetSearch')?.value || '');
+      let rows = getBudgetReferenceRows();
+      if(q){
+        rows = rows.filter(r=> (canon(r.Tipo)+' '+canon(r.Categoria)+' '+canon(r.Concepto)).includes(q));
+      }
+
+      let totE = 0, totI = 0;
+      for(const r of rows){
+        if(r.Tipo==='Egresos') totE += r.Mensual;
+        else if(r.Tipo==='Ingresos') totI += r.Mensual;
+      }
+      if(sumEl){
+        sumEl.textContent = `Renglones: ${rows.length.toLocaleString('es-MX')} · Total mensual Ingresos: ${fmtMoney(totI)} · Total mensual Egresos: ${fmtMoney(totE)}`;
+      }
+
+      const esc = (s)=> escapeHtml(String(s??''));
+      const numStr = (n)=> (isFinite(n)? String(Math.round(n*100)/100) : '0');
+
+      tb.innerHTML = rows.map(r=>{
+        const id = r.__id;
+        // Mostrar el valor tal cual para edición
+        return `<tr data-id="${esc(id)}">
+          <td><input class="bInp" data-id="${esc(id)}" data-field="TIPO" value="${esc(r.Tipo)}" placeholder="Egresos / Ingresos" /></td>
+          <td><input class="bInp" data-id="${esc(id)}" data-field="CATEGORIA" value="${esc(r.Categoria)}" placeholder="Categoría" /></td>
+          <td><input class="bInp" data-id="${esc(id)}" data-field="CONCEPTO" value="${esc(r.Concepto)}" placeholder="Concepto" /></td>
+          <td class="num"><input class="bNum" type="number" step="0.01" data-id="${esc(id)}" data-field="MENSUAL" value="${numStr(r.Mensual)}" /></td>
+          <td class="num"><input class="bNum" type="number" step="0.01" data-id="${esc(id)}" data-field="ANUAL" value="${numStr(r.Anual)}" /></td>
+          <td class="num"><button class="iconBtn bDel" data-id="${esc(id)}" title="Eliminar">🗑</button></td>
+        </tr>`;
+      }).join('');
+
+      // Ajustar estilos de inputs (sin depender de CSS global)
+      // (se mantienen mínimos para no romper tu theme)
+    }
+
+
+    function exportBudgetCSV(){
+      const q = canon(document.getElementById('budgetSearch')?.value || '');
+      let rows = getBudgetReferenceRows();
+      if(q){
+        rows = rows.filter(r=> (canon(r.Tipo)+' '+canon(r.Categoria)+' '+canon(r.Concepto)).includes(q));
+      }
+      const header = ['Tipo','Categoría','Concepto','Mensual','Anual'];
+      const lines = [header.join(',')];
+      for(const r of rows){
+        const esc = (s)=> '"'+String(s??'').replace(/"/g,'""')+'"';
+        lines.push([esc(r.Tipo), esc(r.Categoria), esc(r.Concepto), String(r.Mensual), String(r.Anual)].join(','));
+      }
+      const csv = lines.join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = `presupuesto_referencia_${new Date().toISOString().slice(0,10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0);
     }
 
 
@@ -2331,6 +2602,16 @@ function render(){
       const finOverlay = document.getElementById('finOverlay');
       const btnFinClose = document.getElementById('btnFinClose');
 
+      // Presupuesto (ventana independiente)
+      const btnBudgetWin = document.getElementById('btnBudgetWin');
+      const budgetOverlay = document.getElementById('budgetOverlay');
+      const btnBudgetClose = document.getElementById('btnBudgetClose');
+      const budgetSearch = document.getElementById('budgetSearch');
+      const btnBudgetExport = document.getElementById('btnBudgetExport');
+      const btnBudgetAdd = document.getElementById('btnBudgetAdd');
+      const btnBudgetReset = document.getElementById('btnBudgetReset');
+      const tbBudget = document.getElementById('tbBudget');
+
       function openFin(){
         if(!finOverlay) return;
         finOverlay.classList.add('show');
@@ -2344,10 +2625,69 @@ function render(){
         finOverlay.setAttribute('aria-hidden','true');
       }
 
+      function openBudget(){
+        if(!budgetOverlay) return;
+        budgetOverlay.classList.add('show');
+        budgetOverlay.setAttribute('aria-hidden','false');
+        try{ renderBudgetReference(); }catch(e){}
+        try{ budgetSearch && budgetSearch.focus(); }catch(e){}
+      }
+      function closeBudget(){
+        if(!budgetOverlay) return;
+        budgetOverlay.classList.remove('show');
+        budgetOverlay.setAttribute('aria-hidden','true');
+      }
+
       if(btnFinWin) btnFinWin.addEventListener('click', openFin);
       if(btnFinClose) btnFinClose.addEventListener('click', closeFin);
       if(finOverlay) finOverlay.addEventListener('click', (e)=>{ if(e.target === finOverlay) closeFin(); });
-      document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape') closeFin(); });
+      if(btnBudgetWin) btnBudgetWin.addEventListener('click', openBudget);
+      if(btnBudgetClose) btnBudgetClose.addEventListener('click', closeBudget);
+      if(budgetOverlay) budgetOverlay.addEventListener('click', (e)=>{ if(e.target === budgetOverlay) closeBudget(); });
+      if(budgetSearch) budgetSearch.addEventListener('input', ()=> renderBudgetReference());
+      if(btnBudgetExport) btnBudgetExport.addEventListener('click', ()=> exportBudgetCSV());
+      if(btnBudgetAdd) btnBudgetAdd.addEventListener('click', ()=> addBudgetRow());
+      if(btnBudgetReset) btnBudgetReset.addEventListener('click', ()=>{
+        const ok = confirm('Esto borrará los cambios locales del presupuesto en este navegador y restaurará el presupuesto original recibido del sistema. ¿Continuar?');
+        if(ok) restoreBudgetDefault();
+      });
+
+      // Edición inline (event delegation)
+      if(tbBudget){
+        tbBudget.addEventListener('input', (e)=>{
+          const t = e.target;
+          if(!(t instanceof HTMLElement)) return;
+          if(t.matches('input.bInp, input.bNum')){
+            const id = t.getAttribute('data-id') || '';
+            const field = t.getAttribute('data-field') || '';
+            if(!id || !field) return;
+            let val = t.value;
+            if(field==='MENSUAL' || field==='ANUAL') val = _asNumber(val);
+            else val = String(val||'').trim();
+            updateBudgetById(id, {[field]: val});
+          }
+        });
+
+        tbBudget.addEventListener('click', (e)=>{
+          const t = e.target;
+          if(!(t instanceof HTMLElement)) return;
+          const btn = t.closest('button.bDel');
+          if(btn){
+            const id = btn.getAttribute('data-id') || '';
+            if(id){
+              const ok = confirm('¿Eliminar este renglón del presupuesto?');
+              if(ok) deleteBudgetById(id);
+            }
+          }
+        });
+      }
+
+      document.addEventListener('keydown', (e)=>{
+        if(e.key === 'Escape'){
+          closeFin();
+          closeBudget();
+        }
+      });
 
 
       if(_pdf2) _pdf2.addEventListener('click', downloadPDF);
