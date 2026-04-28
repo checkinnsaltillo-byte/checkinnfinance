@@ -1,7 +1,7 @@
 // URL fija dentro del código (como pediste)
     let APP_CONFIG = {
       financeDataEndpoint: "https://script.google.com/macros/s/AKfycbwmlnws66Fz008rDTX9nWmvUEd6akvfT7e_ejgT85MGDAzx3c8iWNjHj05nS2W0qB8_cw/exec",
-      timeoutMs: 15000
+timeoutMs: 15000
     };
 
     async function loadConfig(){
@@ -42,9 +42,6 @@
     let RAW = [];
     let BUDGET = [];
 
-    // Reservas (Cloud Run)
-    let RES_RAW = [];
-    let RES_LAST_Q = "";
     let SELECTED_KEY = null;
     let SELECTED_SRC = null;
     let CURRENT_VIEW = 'detalle';
@@ -124,13 +121,6 @@
       "Cuenta bancaria": new Set()
     };
 
-    // Filtros para Reservas (Cloud Run)
-    const RES_FILTER_STATE = {
-      "Año": new Set(),           // se sincroniza con el Año financiero (si hay 1 seleccionado)
-      "Alojamiento": new Set(),   // multi
-      "Tipo reserva": new Set()   // multi
-    };
-
 
     const PANEL_RENDER = {}; // permite re-render de paneles (Mes es esclavo de Año)
 
@@ -142,26 +132,19 @@
       return 'E';
     }
     function setTipo(v){
-      document.getElementById('tabE').classList.toggle('active', v==='E');
-      document.getElementById('tabI').classList.toggle('active', v==='I');
-      document.getElementById('tabA').classList.toggle('active', v==='A');
-      document.getElementById('tabR').classList.toggle('active', v==='R');
-      document.getElementById('tabE').setAttribute('aria-selected', v==='E'?'true':'false');
-      document.getElementById('tabI').setAttribute('aria-selected', v==='I'?'true':'false');
-      document.getElementById('tabA').setAttribute('aria-selected', v==='A'?'true':'false');
-      document.getElementById('tabR').setAttribute('aria-selected', v==='R'?'true':'false');
+      const tabE = document.getElementById('tabE');
+      const tabI = document.getElementById('tabI');
+      const tabA = document.getElementById('tabA');
+      if(tabE){ tabE.classList.toggle('active', v==='E'); tabE.setAttribute('aria-selected', v==='E'?'true':'false'); }
+      if(tabI){ tabI.classList.toggle('active', v==='I'); tabI.setAttribute('aria-selected', v==='I'?'true':'false'); }
+      if(tabA){ tabA.classList.toggle('active', v==='A'); tabA.setAttribute('aria-selected', v==='A'?'true':'false'); }
 
       SELECTED_KEY = null;
       SELECTED_SRC = null;
       setRightView('detalle');
       syncTipoUI();
-      if(v==='R'){
-        loadReservations(true).then(()=>{ try{ renderResFilterPanels(); }catch(e){}; render(); });
-      }
       render();
     }
-
-
 
     async function loadLive(){
       try{
@@ -182,226 +165,6 @@
         const msg = (e && e.name === 'AbortError') ? 'Timeout (15s)' : 'Error';
         $('status').innerHTML = '<span class="dot"></span>'+msg+' al actualizar (ver consola)';
         return false;
-      }
-    }
-
-
-    // ------------------ Reservas: Cloud Run ------------------
-    function selectedYearFallback(){
-      const yrs = Array.from(FILTER_STATE["Año"]||[]);
-      return (yrs.length===1) ? yrs[0] : "";
-    }
-    function resField(r, keys, fallback=""){
-      for(const k of keys){
-        if(r && r[k] !== undefined && r[k] !== null && String(r[k]).trim()!=="") return r[k];
-      }
-      return fallback;
-    }
-    function toDateSafe(x){
-      const s = String(x||"").trim();
-      if(!s) return null;
-      const d = new Date(s);
-      if(!isFinite(d.getTime())) return null;
-      return d;
-    }
-    function nightsBetween(a,b){
-      const da = toDateSafe(a); const db = toDateSafe(b);
-      if(!da || !db) return null;
-      const ms = db.getTime()-da.getTime();
-      if(!isFinite(ms)) return null;
-      const n = Math.round(ms/(1000*60*60*24));
-      return (n>=0 && n<400) ? n : null;
-    }
-    function resYear(r){
-      const d = toDateSafe(resField(r, ["checkIn","arrival","start","startDate","desde","fecha_inicio","fechaEntrada","FechaEntrada"]));
-      if(d) return String(d.getFullYear());
-      const y = String(resField(r, ["year","Año","ano","anio"], "")).trim();
-      return y;
-    }
-    function resProp(r){
-      return String(resField(r, ["propertyName","listingName","unitName","accommodation","alojamiento","propiedad","name"], "—")).trim() || "—";
-    }
-    function resType(r){
-      return String(resField(r, ["bookingType","type","channel","source","origen","fuente","plataforma"], "—")).trim() || "—";
-    }
-
-    function buildResOptions(){
-      const props = uniqSorted(RES_RAW.map(r=>resProp(r)).filter(x=>x && x!=="—"));
-      const types = uniqSorted(RES_RAW.map(r=>resType(r)).filter(x=>x && x!=="—"));
-      return {props, types};
-    }
-
-    function renderResFilterPanels(){
-      const {props, types} = buildResOptions();
-
-      const propWrap = document.getElementById('resProps');
-      const typeWrap = document.getElementById('resTypes');
-
-      if(propWrap){
-        propWrap.innerHTML = '';
-        props.forEach(v=>{
-          const id = 'rp_' + canon(v).replace(/[^a-z0-9]+/g,'_');
-          const lab = document.createElement('label');
-          lab.className = 'opt';
-          lab.innerHTML = `<input type="checkbox" id="${id}"> <span>${escHtml(v)}</span>`;
-          const inp = lab.querySelector('input');
-          inp.checked = RES_FILTER_STATE["Alojamiento"].size ? RES_FILTER_STATE["Alojamiento"].has(v) : true;
-          inp.addEventListener('change', ()=>{
-            if(!RES_FILTER_STATE["Alojamiento"].size){
-              // si estaba "todos", primero inicializa con todos
-              props.forEach(p=>RES_FILTER_STATE["Alojamiento"].add(p));
-            }
-            if(inp.checked) RES_FILTER_STATE["Alojamiento"].add(v);
-            else RES_FILTER_STATE["Alojamiento"].delete(v);
-            render();
-          });
-          propWrap.appendChild(lab);
-        });
-      }
-
-      if(typeWrap){
-        typeWrap.innerHTML = '';
-        types.forEach(v=>{
-          const id = 'rt_' + canon(v).replace(/[^a-z0-9]+/g,'_');
-          const lab = document.createElement('label');
-          lab.className = 'opt';
-          lab.innerHTML = `<input type="checkbox" id="${id}"> <span>${escHtml(v)}</span>`;
-          const inp = lab.querySelector('input');
-          inp.checked = RES_FILTER_STATE["Tipo reserva"].size ? RES_FILTER_STATE["Tipo reserva"].has(v) : true;
-          inp.addEventListener('change', ()=>{
-            if(!RES_FILTER_STATE["Tipo reserva"].size){
-              types.forEach(t=>RES_FILTER_STATE["Tipo reserva"].add(t));
-            }
-            if(inp.checked) RES_FILTER_STATE["Tipo reserva"].add(v);
-            else RES_FILTER_STATE["Tipo reserva"].delete(v);
-            render();
-          });
-          typeWrap.appendChild(lab);
-        });
-      }
-
-      const pLbl = document.getElementById('resPropsLbl');
-      if(pLbl){
-        const sel = RES_FILTER_STATE["Alojamiento"].size;
-        pLbl.textContent = sel ? `${sel} seleccionados` : `Todos (${props.length})`;
-      }
-      const tLbl = document.getElementById('resTypesLbl');
-      if(tLbl){
-        const sel = RES_FILTER_STATE["Tipo reserva"].size;
-        tLbl.textContent = sel ? `${sel} seleccionados` : `Todos (${types.length})`;
-      }
-    }
-
-    async function loadReservations(force=false){
-      const year = selectedYearFallback();
-      const propsSel = [...RES_FILTER_STATE["Alojamiento"]];
-      const typesSel = [...RES_FILTER_STATE["Tipo reserva"]];
-      const q = JSON.stringify({year, propsSel, typesSel});
-      if(!force && RES_LAST_Q === q && RES_RAW.length) return true;
-
-      try{
-        const base = (APP_CONFIG.reservationsApiBase || "").replace(/\/$/,"");
-        const ep = APP_CONFIG.reservationsEndpoint || "/api/reservations";
-        const url = new URL(base + ep);
-        if(year) url.searchParams.set("year", year);
-        if(propsSel.length) url.searchParams.set("property", propsSel.join(","));
-        if(typesSel.length) url.searchParams.set("type", typesSel.join(","));
-
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), Number(APP_CONFIG.timeoutMs||15000));
-        const res = await fetch(url.toString(), {cache:"no-store", signal: ctrl.signal});
-        clearTimeout(t);
-        if(!res.ok) throw new Error("HTTP "+res.status);
-
-        const payload = await res.json();
-        const arr = payload.reservations || payload.data || payload.items || payload.records || [];
-        if(!Array.isArray(arr)) throw new Error("Formato inesperado en reservas");
-        RES_RAW = arr;
-        RES_LAST_Q = q;
-        return true;
-      }catch(e){
-        console.warn("Reservas: fetch falló", e);
-        return false;
-      }
-    }
-
-    function filteredReservations(){
-      const year = selectedYearFallback();
-      const props = RES_FILTER_STATE["Alojamiento"];
-      const types = RES_FILTER_STATE["Tipo reserva"];
-
-      return RES_RAW.filter(r=>{
-        const y = resYear(r);
-        if(year && y && y !== year) return false;
-        const p = resProp(r);
-        const t = resType(r);
-        if(props.size && p && !props.has(p)) return false;
-        if(types.size && t && !types.has(t)) return false;
-        return true;
-      });
-    }
-
-    function aggregateReservations(){
-      const recs = filteredReservations();
-      const g = new Map();
-      for(const r of recs){
-        const prop = resProp(r);
-        const typ  = resType(r);
-        const amount = Number(resField(r, ["total","amount","importe","monto","price","totalAmount","revenue","payout"], 0)) || 0;
-        const nights = Number(resField(r, ["nights","noches","nightCount"], "")) || nightsBetween(
-          resField(r, ["checkIn","arrival","startDate","start","desde","fechaEntrada"]),
-          resField(r, ["checkOut","departure","endDate","end","hasta","fechaSalida"])
-        ) || 0;
-
-        const key = prop + "||" + typ;
-        if(!g.has(key)) g.set(key, {key, prop, typ, bookings:0, nights:0, amount:0});
-        const o = g.get(key);
-        o.bookings += 1;
-        o.nights += (nights||0);
-        o.amount += amount;
-      }
-
-      const rows = [...g.values()].sort((a,b)=> (b.amount-a.amount) || (b.bookings-a.bookings) || a.prop.localeCompare(b.prop,'es'));
-      const totBookings = recs.length;
-      const totNights = rows.reduce((a,r)=>a+r.nights,0);
-      const totAmount = rows.reduce((a,r)=>a+r.amount,0);
-      return {rows, totBookings, totNights, totAmount};
-    }
-
-    function renderReservationsDetails(rowKey){
-      const tb = document.getElementById('tbD');
-      tb.innerHTML = '';
-      if(!rowKey){
-        document.getElementById('selInfo').textContent = 'Sin selección.';
-        return;
-      }
-      const [prop, typ] = rowKey.split('||');
-      document.getElementById('selInfo').innerHTML = `<span class="pill">Reservas</span>
-        <span style="color:var(--muted)"> ${escHtml(prop)} • ${escHtml(typ)}</span>`;
-
-      const recs = filteredReservations().filter(r=>resProp(r)===prop && resType(r)===typ);
-
-      for(const r of recs){
-        const checkIn  = resField(r, ["checkIn","arrival","startDate","start","desde","fechaEntrada"], "");
-        const checkOut = resField(r, ["checkOut","departure","endDate","end","hasta","fechaSalida"], "");
-        const status   = String(resField(r, ["status","estado"], "")).trim();
-        const amount   = Number(resField(r, ["total","amount","importe","monto","price","totalAmount"], 0)) || 0;
-        const nights   = Number(resField(r, ["nights","noches","nightCount"], "")) || nightsBetween(checkIn, checkOut) || 0;
-        const guest    = String(resField(r, ["guestName","guest","huesped","cliente"], "")).trim();
-        const code     = String(resField(r, ["code","bookingCode","id","reservationId"], "")).trim();
-
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${escHtml(String(checkIn||"—"))}</td>
-          <td>${escHtml(String(checkOut||"—"))}</td>
-          <td><span class="pill">${escHtml(status||typ)}</span></td>
-          <td>${escHtml(prop)}</td>
-          <td>${escHtml(guest || code || '—')}</td>
-          <td>${escHtml("Noches: "+(nights||0))}</td>
-          <td><span class="pill ${amount? 'good':'warn'}">${amount? 'OK':'—'}</span></td>
-          <td class="num">${fmtMoney(amount)}</td>
-        `;
-        tb.appendChild(tr);
       }
     }
 
@@ -1596,79 +1359,8 @@ function renderFinanceModule(){
       if(fin) fin.textContent = `• Año: ${yTxt} • Mes: ${mTxt}`;
 }
 
-
-function renderReservationsView(){
-  // KPIs: reutilizamos los existentes para mostrar resumen rápido
-  const agg = aggregateReservations();
-
-  // Título/subtítulo
-  document.getElementById('mainTableTitle').textContent = 'Reservas históricas (por alojamiento y tipo)';
-  document.getElementById('mainTableSub').textContent = 'Datos desde Cloud Run. Click en un renglón para ver el detalle.';
-
-  // KPIs (se muestran en la barra superior ya existente)
-  // Egresos KPI -> total importe reservas
-  document.getElementById('kRealE').textContent = fmtMoney(agg.totAmount);
-  document.getElementById('kRowsE').textContent = agg.rows.length + ' grupos';
-  // Ingresos KPI -> total reservas / noches
-  document.getElementById('kRealI').textContent = agg.totBookings.toLocaleString('es-MX') + ' reservas';
-  document.getElementById('kRowsI').textContent = agg.totNights.toLocaleString('es-MX') + ' noches';
-
-  // barras: ocultamos significado (simple)
-  setBar('pME', NaN, 'E');
-  setBar('pMI', NaN, 'I');
-  setBar('pYE', NaN, 'E');
-  setBar('pYI', NaN, 'I');
-
-  // Header (col names)
-  try{ syncTipoUI(); }catch(e){}
-
-  const tbody = document.getElementById('tbMain');
-  tbody.innerHTML = '';
-
-  agg.rows.forEach(r=>{
-    const tr = document.createElement('tr');
-    tr.tabIndex = 0;
-    tr.dataset.key = r.key;
-    tr.innerHTML = `
-      <td>${escHtml(r.prop)}</td>
-      <td>${escHtml(r.typ)}</td>
-      <td class="num">${r.bookings.toLocaleString('es-MX')}</td>
-      <td class="num">${r.nights.toLocaleString('es-MX')}</td>
-      <td class="num">${fmtMoney(r.amount)}</td>
-    `;
-    tr.addEventListener('click', ()=>{
-      SELECTED_KEY = r.key;
-      SELECTED_SRC = 'R';
-      renderReservationsDetails(r.key);
-      highlightSelection();
-    });
-    tr.addEventListener('keydown', (e)=>{
-      if(e.key==='Enter' || e.key===' '){
-        e.preventDefault();
-        tr.click();
-      }
-    });
-    tbody.appendChild(tr);
-  });
-
-  // default detail
-  if(SELECTED_SRC !== 'R') {
-    SELECTED_KEY = null;
-    SELECTED_SRC = 'R';
-  }
-  if(SELECTED_KEY) renderReservationsDetails(SELECTED_KEY);
-  else renderReservationsDetails(null);
-
-  // Actualiza etiquetas del drawer (si aplica)
-  try{ renderResFilterPanels(); }catch(e){}
-}
-
 function render(){
       const tipo = tipoVal();
-      if(tipo==='R'){
-        renderReservationsView();
-        return;
-      }
       const sE = aggregate('E');
       const sI = aggregate('I');
       const s = (tipo==='E') ? sE : sI;
@@ -1946,8 +1638,7 @@ function render(){
       document.getElementById('tabE').addEventListener('click', ()=> setTipo('E'));
       document.getElementById('tabI').addEventListener('click', ()=> setTipo('I'));
       document.getElementById('tabA').addEventListener('click', ()=> setTipo('A'));
-      document.getElementById('tabR').addEventListener('click', ()=> setTipo('R'));
-
+      
       const rtDet = document.getElementById('rtDet');
       const rtAl  = document.getElementById('rtAl');
       if(rtDet) rtDet.addEventListener('click', ()=> setRightView('detalle'));
